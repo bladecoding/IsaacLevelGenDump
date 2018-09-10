@@ -43,7 +43,7 @@ struct RoomDescription {
     //RoomShape @ 0x40
 };
 struct Room {
-    //0xC0 bytes
+    //0xB8 bytes
     int32_t gridIndex;
     int32_t safeGridIndex;
     int32_t listIndex;
@@ -52,7 +52,7 @@ struct Room {
     //int32_t DoorsFlag; //0xF = all doors enabled
     //int32_t ConnectedRoomsIndex[8]; WN, NW, EN, SW, WS, NE, ES, SE
 
-    char data[0xb0];
+    char data[0xa8];
 };
 struct RoomList {
 public:
@@ -69,13 +69,13 @@ public:
     char padding1[0xC];
     //The rooms are placed on a 13x13 grid(169). However there is a max of 138 rooms in the grid.
     //The last 9 rooms are reserved by the negative room indexes which aren't in the grid. (E.g. I Am Error, black market, etc)
-    Room Rooms[138]; //@14
-    int32_t LevelRoomIndexes[169]; //@0x6794
-    int32_t RoomCount; //@0x6a38
-    char padding2[0x354C];
-    uint32_t StartSeed; //@ 0x9f88
-    Rng StartRng; //@ 0x9f8C
-    uint32_t StageSeeds[13]; //@ 0x9f9c
+    Room Rooms[138]; //@ 0x14
+    int32_t LevelRoomIndexes[169]; //@0x6344 (used in GetRoomByIdx)
+    int32_t RoomCount; //@ 0x65E8 (lua GetRoomCount)
+    char padding2[0x31EC];
+    uint32_t StartSeed; //@ 0x97D8 first cmp in IsaacGenStageAddr)
+    Rng StartRng; //@ 0x97DC
+    uint32_t StageSeeds[13]; //@ 0x97EC
 };
 
 typedef void(CGame::*GENLEVEL)();
@@ -83,25 +83,22 @@ typedef void(CGame::*LEVELUPDATE)();
 typedef void(CGame::*LEVELSETNEXTSTAGE)();
 typedef RoomList(CGame::*GETROOMS)();
 
-int32_t UpdateCallerAddr = 0x0063911F;
-int32_t UpdateAddr = 0x006533C0;
-
-//int32_t IsaacGenLevelAddr = 0x053F2F0;
-int32_t IsaacGenStageAddr = 0x005409C0;
-int32_t GameAddr = (int32_t)0x934e98;
-int32_t GlobalsAddr = 0x00934EA4;
-int32_t GetRoomsAddr = 0x0053F2D0;
-int32_t LevelUpdateAddr = 0x00539410;
-int32_t LevelSetNextStageAddr = 0x00541D00; //Level::SetNextStage
-
-int32_t IsSecretUnlockedAddr = 0x00634730;
-
-int32_t MallocIATAddr = 0x00771404;
-int32_t FreeIATAddr = 0x007713FC;
-
-int32_t SecretCount = 339;
+int32_t UpdateCallerAddr = 0x0065B515;
+int32_t UpdateAddr = 0x00674000;
 
 
+int32_t IsaacGenStageAddr = 0x00546FC0;
+int32_t GameAddr = (int32_t)0x0093A0D0;
+int32_t GlobalsAddr = 0x0093A0E0;
+int32_t GetRoomsAddr = 0x005456C0; //lua GetRooms
+int32_t LevelUpdateAddr = 0x0053F530; //lua Level::Update
+int32_t LevelSetNextStageAddr = 0x00548210; //lua Level::SetNextStage
+
+int32_t IsSecretUnlockedAddr = 0x006566D0;
+int32_t SecretCount = 403; //can be found via the achievement command
+int32_t SecretUnlockArray = 0x44;
+
+int32_t IsStageLoadedOffset = 0x8ED88;
 
 GENLEVEL IsaacGenLevel = *(GENLEVEL*)&IsaacGenStageAddr;
 GETROOMS GetRooms = *(GETROOMS*)&GetRoomsAddr;
@@ -212,142 +209,17 @@ void WriteStage(FILE* fp) {
     }*/
 }
 
-struct CallStack
-{
-    uint32_t Addresses[10];
-};
-
-std::map<uint32_t, CallStack> leak;
-
-
-
-template< typename T >
-std::string int_to_hex(T i)
-{
-    std::stringstream stream;
-    stream << "0x"
-        << std::setfill('0') << std::setw(sizeof(T) * 2)
-        << std::hex << i;
-    return stream.str();
-}
-void dump() {
-    OutputDebugStringA("Dumping memory leak info");
-    auto i = 0;
-    for (auto itr = leak.begin(); itr != leak.end(); ++itr)
-    {
-        if (i++ == 5)
-            break;
-        std::stringstream fn;
-        fn << "Leaked Ptr: " << (uint32_t)itr->first << " caller:";
-        for (auto i = 0; i < 10; i++)
-        {
-            if (itr->second.Addresses[i] != 0)
-                fn << " " << int_to_hex(itr->second.Addresses[i]);
-        }
-        OutputDebugStringA(fn.str().c_str());
-    }
-}
-typedef void* (__cdecl*MALLOC)(size_t);
-typedef void(__cdecl*FREE)(void*);
-MALLOC origMalloc;
-FREE origFree;
-MALLOC trampMalloc;
-FREE trampFree;
-
-bool isRecording = true;
-
-void* __cdecl myMalloc(size_t size) {
-    uint32_t frame;
-    __asm {
-        mov frame, ebp
-    }
-    uint32_t callstack[10];
-    memset((LPVOID)&callstack, 0, 40);
-    for (auto i = 0; i < 10 && frame != 0; i++) {
-        callstack[i] = *(uint32_t*)(frame + 4);;
-        frame = *(uint32_t*)(frame);
-    }
-
-
-    auto ptr = trampMalloc(size);
-    if (ptr > 0) {
-        CallStack cs;
-        memcpy((LPVOID)&cs.Addresses, (LPVOID)&callstack, 10 * 4);
-        if (isRecording)
-            leak.insert(std::make_pair((uint32_t)ptr, cs));
-    }
-    else if (ptr == nullptr)
-    {
-        dump();
-    }
-    return ptr;
-}
-void tryCleanup() {
-    /*for (auto itr = leak.begin(); itr != leak.end(); ++itr)
-    {
-       itr->second = itr->second + 1;
-    }
-
-    for (auto itr = leak.cbegin(); itr != leak.cend(); )
-    {
-        if (itr->second > 10)
-        {
-            trampFree((void*)itr->first);
-            leak.erase(itr++);
-        }
-        else
-        {
-            ++itr;
-        }
-    }*/
-}
-void __cdecl myFree(void* ptr) {
-    trampFree(ptr);
-    leak.erase((uint32_t)ptr);
-}
-
-
-
-void hook() {
-    auto mem = (int32_t)VirtualAlloc(nullptr, 0x1000, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-    origMalloc = (MALLOC)*(uint32_t*)MallocIATAddr;
-    origFree = (FREE)*(uint32_t*)FreeIATAddr;
-
-    //55 8B EC 56 8B 75 08
-    //55 8B EC 83 7D 08 00
-    char dt1[] = { 0x55, 0x8B, 0xEC ,0x56 ,0x8B ,0x75 ,0x08 };
-    memcpy((void*)mem, dt1, 7);
-    *(int8_t*)(mem + 7) = 0xE9;
-    *(int32_t*)(mem + 8) = ((uint32_t)origMalloc + 7) - (mem + 12);
-
-    char dt2[] = { 0x55 ,0x8B ,0xEC ,0x83 ,0x7D ,0x08 ,0x00 };
-    memcpy((void*)(mem + 12), dt2, 7);
-    *(int8_t*)(mem + 19) = 0xE9;
-    *(int32_t*)(mem + 20) = ((uint32_t)origFree + 7) - (mem + 24);
-
-    trampMalloc = (MALLOC)mem;
-    trampFree = (FREE)(mem + 12);
-
-    DWORD old;
-    VirtualProtect((LPVOID)origMalloc, 5, PAGE_EXECUTE_READWRITE, &old);
-    *(int8_t*)origMalloc = 0xE9;
-    *(int32_t*)((uint32_t)origMalloc + 1) = (uint32_t)&myMalloc - ((uint32_t)origMalloc + 5);
-    *(int16_t*)((uint32_t)origMalloc + 5) = 0x9090;
-    VirtualProtect((LPVOID)origFree, 5, PAGE_EXECUTE_READWRITE, &old);
-    *(int8_t*)(origFree) = 0xE9;
-    *(int32_t*)((uint32_t)origFree + 1) = (uint32_t)&myFree - ((uint32_t)origFree + 5);
-    *(int16_t*)((uint32_t)origFree + 5) = 0x9090;
-}
-
 void EnableAllSecrets() {
     DWORD old;
     VirtualProtect((LPVOID)IsSecretUnlockedAddr, 5, PAGE_EXECUTE_READWRITE, &old);
 
+	//mov al, 1
+	//ret 4
     char patch[] = { 0xB0, 0x01, 0xC2, 0x04, 0x00 };
     memcpy((LPVOID)IsSecretUnlockedAddr, patch, 5);
 
     auto globals = *(int32_t*)GlobalsAddr;
-    auto secretsPtr = globals + 0x45;
+    auto secretsPtr = globals + SecretUnlockArray + 1; //@ [Globals] +0xC +0x38 (+1 since achievements are 1-403)
     for (auto i = 0; i < SecretCount; i++)
     {
         *(char*)(secretsPtr + i) = 1;
@@ -374,7 +246,7 @@ bool IsStageLoaded()
     auto globals = *(int32_t*)GlobalsAddr;
     //At this point we will still crash due to transitioning
     //Todo: Investigate using "0051AB0A | 83 BE 48 81 00 00 00     | cmp     dword ptr ds:[esi+8148], 0                               | room transition state? (1 = started, 3 = finished)"
-    return *(int32_t*)globals == 2 && *(int32_t*)(globals + 0x6e5cc) == 1;
+    return *(int32_t*)globals == 2 && *(int32_t*)(globals + IsStageLoadedOffset) == 1;
 }
 
 bool runOnce = false;
@@ -388,7 +260,6 @@ void Update() {
         fn << "dump\\layouts_" << mt_rand() << ".bin";
         auto fp = fopen(fn.str().c_str(), "wb");
 
-        //hook();
 
         EnableAllSecrets();
 
