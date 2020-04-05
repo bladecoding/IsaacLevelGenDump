@@ -10,6 +10,24 @@
 #include <map>
 #include <iomanip>
 
+enum ROOM_SHAPE
+{
+    ROOMSHAPE_NULL = 0,
+    ROOMSHAPE_1x1 = 1,
+    ROOMSHAPE_IH = 2,
+    ROOMSHAPE_IV = 3,
+    ROOMSHAPE_1x2 = 4,
+    ROOMSHAPE_IIV = 5,
+    ROOMSHAPE_2x1 = 6,
+    ROOMSHAPE_IIH = 7,
+    ROOMSHAPE_2x2 = 8,
+    ROOMSHAPE_LTL = 9,
+    ROOMSHAPE_LTR = 10,
+    ROOMSHAPE_LBL = 11,
+    ROOMSHAPE_LBR = 12,
+    NUM_ROOMSHAPES = 13
+};
+
 struct Rng {
 public:
     uint32_t seed;
@@ -32,9 +50,11 @@ struct RoomDescription {
     int32_t roomId;
     int32_t roomSubType;
     char data[0x34];
+		//StageIndex @ 0x0
     //RoomType @ 0x4
     //RoomId @ 0x8
     //SubType @ 0xC
+		//Name @ 0x10 (std::string)
     //Difficulty @ 0x28
     //Weight @ 0x2c
     //Doors @ 0x34
@@ -78,10 +98,15 @@ public:
     uint32_t StageSeeds[13]; //@ 0x97EC
 };
 
+class CGlobals {
+
+};
+
 typedef void(CGame::*GENLEVEL)();
 typedef void(CGame::*LEVELUPDATE)();
 typedef void(CGame::*LEVELSETNEXTSTAGE)();
 typedef RoomList(CGame::*GETROOMS)();
+typedef void(CGlobals::*LOAD_SAVE)(int idx);
 
 int32_t UpdateCallerAddr = 0x0065B515;
 int32_t UpdateAddr = 0x00674000;
@@ -100,10 +125,13 @@ int32_t SecretUnlockArray = 0x44;
 
 int32_t IsStageLoadedOffset = 0x8ED88;
 
+int32_t LoadSaveAddr = 0x00676F60;
+
 GENLEVEL IsaacGenLevel = *(GENLEVEL*)&IsaacGenStageAddr;
 GETROOMS GetRooms = *(GETROOMS*)&GetRoomsAddr;
 LEVELUPDATE LevelUpdate = *(LEVELUPDATE*)&LevelUpdateAddr;
 LEVELSETNEXTSTAGE LevelSetNextStage = *(LEVELSETNEXTSTAGE*)&LevelSetNextStageAddr;
+LOAD_SAVE LoadSave = *(LOAD_SAVE*)&LoadSaveAddr;
 
 CGame* GetGame() {
     return (CGame*)(*(int32_t*)GameAddr);
@@ -249,10 +277,20 @@ bool IsStageLoaded()
     return *(int32_t*)globals == 2 && *(int32_t*)(globals + IsStageLoadedOffset) == 1;
 }
 
+void ResetState() {
+    char* ptr = (char*)GetGame();
+    *(uint32_t*)(ptr + 0x294048) = 1; //Hard mode
+    *(uint32_t*)(ptr + 0x213850) = 0; //GameStateFlag
+    *(uint32_t*)(ptr + 0x213854) = 0; //GameStateFlag
+
+}
+
 bool runOnce = false;
 void Update() {
     auto game = GetGame();
     if (!runOnce && game != nullptr && IsStageLoaded()) {
+        auto g = (CGlobals*)(*(int32_t*)GlobalsAddr);
+        (g->*LoadSave)(1);
         //
         std::mt19937 mt_rand(std::time(0));
 
@@ -282,6 +320,7 @@ void Update() {
             for (auto i = 1; i < 10; i++) {
                 game->Stage = i;
                 game->StageType = GetStageType(i, game->StageSeeds[i]);
+                ResetState();
                 (game->*IsaacGenLevel)();
                 (game->*LevelUpdate)();
 
@@ -292,6 +331,7 @@ void Update() {
                 for (auto j = 0; j < 2; j++) {
                     game->Stage = i;
                     game->StageType = j;
+                    ResetState();
                     (game->*IsaacGenLevel)();
                     (game->*LevelUpdate)();
 
@@ -301,6 +341,7 @@ void Update() {
 
             game->Stage = 12;
             game->StageType = GetStageType(12, game->StageSeeds[12]);
+            ResetState();
             (game->*IsaacGenLevel)();
             (game->*LevelUpdate)();
 
